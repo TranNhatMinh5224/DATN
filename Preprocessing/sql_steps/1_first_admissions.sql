@@ -1,15 +1,12 @@
 -- =====================================================================
--- BUOC 1: LOC LAN NHAP VIEN DAU TIEN & TINH TUOI, NHAN TU VONG
+-- BƯỚC 1: LỌC LẦN NHẬP VIỆN ĐẦU TIÊN & TÍNH TUỔI, NHÃN TỬ VONG
+-- Schema: du_doan_tu_vong
 -- =====================================================================
--- File nay lam 3 viec:
--- 1. Quet bang admissions, dung ROW_NUMBER() de giu lai lan nhap vien DAU TIEN (rn=1).
--- 2. Tinh Tuoi (age) bang cong thuc MIMIC-IV: anchor_age + (Nam nhap vien - anchor_year).
--- 3. Tinh Nhan tu vong (mortality_1yr): Kiem tra xem ngay mat (dod) co nam trong 365 ngay tu luc nhap vien hay khong.
--- Ket qua duoc luu vao bang moi: first_admission_data.
--- =====================================================================
-DROP TABLE IF EXISTS first_admission_data CASCADE;
+SET search_path TO du_doan_tu_vong, hosp, icu, public;
 
-CREATE TABLE first_admission_data AS
+DROP TABLE IF EXISTS clean_admissions CASCADE;
+
+CREATE TABLE clean_admissions AS
 WITH ranked_admissions AS (
     SELECT 
         a.subject_id,
@@ -22,15 +19,16 @@ WITH ranked_admissions AS (
         p.dod,
         ROW_NUMBER() OVER (PARTITION BY a.subject_id ORDER BY a.admittime) AS rn
     FROM 
-        admissions a
+        hosp.admissions a
     JOIN 
-        patients p ON a.subject_id = p.subject_id
+        hosp.patients p ON a.subject_id = p.subject_id
 ),
 first_admissions AS (
     SELECT
         subject_id,
         hadm_id,
         gender,
+        -- Công thức tính tuổi chuẩn của MIMIC-IV
         anchor_age + (CAST(EXTRACT(YEAR FROM admittime) AS INT) - anchor_year) AS age,
         dod,
         admittime,
@@ -45,28 +43,20 @@ SELECT
     hadm_id,
     gender,
     age,
-    dod,
     admittime,
     dischtime,
+    -- Nhãn tử vong (1 = Chết trong vòng 1 năm kể từ khi nhập viện, 0 = Sống)
     CASE 
         WHEN dod IS NOT NULL 
              AND dod >= admittime
              AND dod <= admittime + INTERVAL '365 days' 
         THEN 1
         ELSE 0
-    END AS mortality_1yr,
-    0 AS cardiovascular,
-    0 AS neurological,
-    0 AS pulmonary,
-    0 AS diabetes,
-    0 AS renal,
-    0 AS liver,
-    0 AS cancer,
-    0 AS mental_substance,
-    0 AS hem_metabolic,
-    0 AS autoimmune
+    END AS mortality_1yr
 FROM 
     first_admissions
 WHERE 
-    age BETWEEN 1 AND 80;
+    age >= 18; -- Chỉ lấy người lớn
 
+CREATE INDEX idx_clean_adm_sub ON clean_admissions (subject_id);
+CREATE INDEX idx_clean_adm_hadm ON clean_admissions (hadm_id);
