@@ -1,288 +1,129 @@
 -- =====================================================================
--- BUOC 4: TINH TOAN DIEM BENH NEN (ELIXHAUSER) 
+-- BƯỚC 4: TÍNH ĐIỂM BỆNH NỀN (ELIXHAUSER) TỪ ICD-9 VÀ ICD-10
+-- Schema: du_doan_tu_vong
 -- =====================================================================
--- File nay xu ly logic rat phuc tap tu tac gia goc:
--- 1. Quet bang diagnoses_icd (chua ma benh).
--- 2. Quy doi ma benh (icd_code) thanh 31 loai benh nen (VD: chf = suy tim).
--- 3. Ghi nhan (max) xem benh nhan co mac benh do hay khong.
--- 4. Gom 31 benh thanh 10 nhom benh chinh.
--- 5. UPDATE 10 cot diem nay vao bang first_admission_data de hoan thien.
--- =====================================================================
+SET search_path TO du_doan_tu_vong, hosp, icu, public;
+
+DROP TABLE IF EXISTS clean_comorbidities CASCADE;
+
+CREATE TABLE clean_comorbidities AS
 WITH elixhauser_flags AS (
-  SELECT
-    subject_id,
-    hadm_id,
-    CASE
-  when icd_code in ('39891','40201','40211','40291','40401','40403','40411','40413','40491','40493') then 1
-  when SUBSTR(icd_code, 1, 4) in ('4254','4255','4257','4258','4259') then 1
-  when SUBSTR(icd_code, 1, 3) in ('428') then 1
-  else 0 end as chf       /* Congestive heart failure */
+  SELECT 
+    d.subject_id, 
+    d.hadm_id,
+    -- 1. Congestive Heart Failure
+    MAX(CASE 
+      WHEN icd_version = 9 AND (SUBSTR(icd_code, 1, 3) IN ('398','402','428') OR SUBSTR(icd_code, 1, 4) IN ('4041','4049')) THEN 1
+      WHEN icd_version = 10 AND (SUBSTR(icd_code, 1, 3) IN ('I09','I11','I13','I50')) THEN 1
+      ELSE 0 END) AS chf,
+      
+    -- 2. Cardiac Arrhythmias
+    MAX(CASE 
+      WHEN icd_version = 9 AND (SUBSTR(icd_code, 1, 3) IN ('426','427') OR SUBSTR(icd_code, 1, 4) IN ('V533')) THEN 1
+      WHEN icd_version = 10 AND (SUBSTR(icd_code, 1, 3) IN ('I44','I45','I47','I48','I49')) THEN 1
+      ELSE 0 END) AS arrhy,
+      
+    -- 3. Valvular Disease
+    MAX(CASE 
+      WHEN icd_version = 9 AND (SUBSTR(icd_code, 1, 3) IN ('093','394','395','396','397','424') OR SUBSTR(icd_code, 1, 4) IN ('7463','7464','7465','7466','V422','V433')) THEN 1
+      WHEN icd_version = 10 AND (SUBSTR(icd_code, 1, 3) IN ('I05','I06','I07','I08','I34','I35','I36','I37')) THEN 1
+      ELSE 0 END) AS valve,
+      
+    -- 4. Pulmonary Circulation Disorders
+    MAX(CASE 
+      WHEN icd_version = 9 AND (SUBSTR(icd_code, 1, 3) IN ('415','416','417')) THEN 1
+      WHEN icd_version = 10 AND (SUBSTR(icd_code, 1, 3) IN ('I26','I27','I28')) THEN 1
+      ELSE 0 END) AS pulmcirc,
+      
+    -- 5. Peripheral Vascular Disorders
+    MAX(CASE 
+      WHEN icd_version = 9 AND (SUBSTR(icd_code, 1, 3) IN ('440','441','442','443','444','447','448') OR SUBSTR(icd_code, 1, 4) IN ('449')) THEN 1
+      WHEN icd_version = 10 AND (SUBSTR(icd_code, 1, 3) IN ('I70','I71','I73','I74','I77','I78','I79')) THEN 1
+      ELSE 0 END) AS perivasc,
+      
+    -- 6 & 7. Hypertension (Uncomplicated & Complicated) -> Gộp chung
+    MAX(CASE 
+      WHEN icd_version = 9 AND (SUBSTR(icd_code, 1, 3) IN ('401','402','403','404','405')) THEN 1
+      WHEN icd_version = 10 AND (SUBSTR(icd_code, 1, 3) IN ('I10','I11','I12','I13','I15')) THEN 1
+      ELSE 0 END) AS htn,
+      
+    -- 8. Paralysis
+    MAX(CASE 
+      WHEN icd_version = 9 AND (SUBSTR(icd_code, 1, 3) IN ('342','343','344')) THEN 1
+      WHEN icd_version = 10 AND (SUBSTR(icd_code, 1, 3) IN ('G81','G82','G83')) THEN 1
+      ELSE 0 END) AS para,
+      
+    -- 9. Other Neurological Disorders
+    MAX(CASE 
+      WHEN icd_version = 9 AND (SUBSTR(icd_code, 1, 3) IN ('331','332','333','334','335','340','341','345')) THEN 1
+      WHEN icd_version = 10 AND (SUBSTR(icd_code, 1, 3) IN ('G10','G11','G12','G20','G21','G22','G25','G30','G31','G32','G35','G40','G41')) THEN 1
+      ELSE 0 END) AS neuro,
+      
+    -- 10. Chronic Pulmonary Disease
+    MAX(CASE 
+      WHEN icd_version = 9 AND (SUBSTR(icd_code, 1, 3) IN ('490','491','492','493','494','495','496','500','501','502','503','504','505')) THEN 1
+      WHEN icd_version = 10 AND (SUBSTR(icd_code, 1, 3) IN ('J40','J41','J42','J43','J44','J45','J46','J47','J60','J61','J62','J63','J64','J65','J66','J67')) THEN 1
+      ELSE 0 END) AS chrnlung,
+      
+    -- 11 & 12. Diabetes (Uncomplicated & Complicated)
+    MAX(CASE 
+      WHEN icd_version = 9 AND (SUBSTR(icd_code, 1, 3) IN ('250')) THEN 1
+      WHEN icd_version = 10 AND (SUBSTR(icd_code, 1, 3) IN ('E10','E11','E12','E13','E14')) THEN 1
+      ELSE 0 END) AS dm,
+      
+    -- 14. Renal Failure
+    MAX(CASE 
+      WHEN icd_version = 9 AND (SUBSTR(icd_code, 1, 3) IN ('585','586')) THEN 1
+      WHEN icd_version = 10 AND (SUBSTR(icd_code, 1, 3) IN ('N18','N19')) THEN 1
+      ELSE 0 END) AS renlfail,
+      
+    -- 15. Liver Disease
+    MAX(CASE 
+      WHEN icd_version = 9 AND (SUBSTR(icd_code, 1, 3) IN ('570','571','572')) THEN 1
+      WHEN icd_version = 10 AND (SUBSTR(icd_code, 1, 3) IN ('K70','K71','K72','K73','K74')) THEN 1
+      ELSE 0 END) AS liver,
+      
+    -- 17 & 18. Cancer (Lymphoma, Metastatic, Solid Tumor)
+    MAX(CASE 
+      WHEN icd_version = 9 AND (SUBSTR(icd_code, 1, 3) IN ('140','141','199','200','208')) THEN 1
+      WHEN icd_version = 10 AND (SUBSTR(icd_code, 1, 1) IN ('C')) THEN 1
+      ELSE 0 END) AS cancer,
+      
+    -- 29, 30, 31. Mental and Substance Abuse
+    MAX(CASE 
+      WHEN icd_version = 9 AND (SUBSTR(icd_code, 1, 3) IN ('290','295','296','297','298','299','300','303','304','305')) THEN 1
+      WHEN icd_version = 10 AND (SUBSTR(icd_code, 1, 1) IN ('F')) THEN 1
+      ELSE 0 END) AS mental_substance,
+      
+    -- Các nhóm khác (Gộp vào hem_metabolic, autoimmune)
+    MAX(CASE 
+      WHEN icd_version = 9 AND (SUBSTR(icd_code, 1, 3) IN ('286','276','280','281','285','278','244')) THEN 1
+      WHEN icd_version = 10 AND (SUBSTR(icd_code, 1, 3) IN ('D65','D66','E87','D50','E66','E03')) THEN 1
+      ELSE 0 END) AS hem_metabolic,
+      
+    MAX(CASE 
+      WHEN icd_version = 9 AND (SUBSTR(icd_code, 1, 3) IN ('714','710')) THEN 1
+      WHEN icd_version = 10 AND (SUBSTR(icd_code, 1, 3) IN ('M05','M06','M32')) THEN 1
+      ELSE 0 END) AS autoimmune
 
-, CASE
-  when icd_code in ('42613','42610','42612','99601','99604') then 1
-  when SUBSTR(icd_code, 1, 4) in ('4260','4267','4269','4270','4271','4272','4273','4274','4276','4278','4279','7850','V450','V533') then 1
-  else 0 end as arrhy
-
-, CASE
-  when SUBSTR(icd_code, 1, 4) in ('0932','7463','7464','7465','7466','V422','V433') then 1
-  when SUBSTR(icd_code, 1, 3) in ('394','395','396','397','424') then 1
-  else 0 end as valve     /* Valvular disease */
-
-, CASE
-  when SUBSTR(icd_code, 1, 4) in ('4150','4151','4170','4178','4179') then 1
-  when SUBSTR(icd_code, 1, 3) in ('416') then 1
-  else 0 end as pulmcirc  /* Pulmonary circulation disorder */
-
-, CASE
-  when SUBSTR(icd_code, 1, 4) in ('0930','4373','4431','4432','4438','4439','4471','5571','5579','V434') then 1
-  when SUBSTR(icd_code, 1, 3) in ('440','441') then 1
-  else 0 end as perivasc  /* Peripheral vascular disorder */
-
-, CASE
-  when SUBSTR(icd_code, 1, 3) in ('401') then 1
-  else 0 end as htn       /* Hypertension, uncomplicated */
-
-, CASE
-  when SUBSTR(icd_code, 1, 3) in ('402','403','404','405') then 1
-  else 0 end as htncx     /* Hypertension, complicated */
-
-, CASE
-  when SUBSTR(icd_code, 1, 4) in ('3341','3440','3441','3442','3443','3444','3445','3446','3449') then 1
-  when SUBSTR(icd_code, 1, 3) in ('342','343') then 1
-  else 0 end as para      /* Paralysis */
-
-, CASE
-  when icd_code in ('33392') then 1
-  when SUBSTR(icd_code, 1, 4) in ('3319','3320','3321','3334','3335','3362','3481','3483','7803','7843') then 1
-  when SUBSTR(icd_code, 1, 3) in ('334','335','340','341','345') then 1
-  else 0 end as neuro     /* Other neurological */
-
-, CASE
-  when SUBSTR(icd_code, 1, 4) in ('4168','4169','5064','5081','5088') then 1
-  when SUBSTR(icd_code, 1, 3) in ('490','491','492','493','494','495','496','500','501','502','503','504','505') then 1
-  else 0 end as chrnlung  /* Chronic pulmonary disease */
-
-, CASE
-  when SUBSTR(icd_code, 1, 4) in ('2500','2501','2502','2503') then 1
-  else 0 end as dm        /* Diabetes w/o chronic complications*/
-
-, CASE
-  when SUBSTR(icd_code, 1, 4) in ('2504','2505','2506','2507','2508','2509') then 1
-  else 0 end as dmcx      /* Diabetes w/ chronic complications */
-
-, CASE
-  when SUBSTR(icd_code, 1, 4) in ('2409','2461','2468') then 1
-  when SUBSTR(icd_code, 1, 3) in ('243','244') then 1
-  else 0 end as hypothy   /* Hypothyroidism */
-
-, CASE
-  when icd_code in ('40301','40311','40391','40402','40403','40412','40413','40492','40493') then 1
-  when SUBSTR(icd_code, 1, 4) in ('5880','V420','V451') then 1
-  when SUBSTR(icd_code, 1, 3) in ('585','586','V56') then 1
-  else 0 end as renlfail  /* Renal failure */
-
-, CASE
-  when icd_code in ('07022','07023','07032','07033','07044','07054') then 1
-  when SUBSTR(icd_code, 1, 4) in ('0706','0709','4560','4561','4562','5722','5723','5724','5728','5733','5734','5738','5739','V427') then 1
-  when SUBSTR(icd_code, 1, 3) in ('570','571') then 1
-  else 0 end as liver     /* Liver disease */
-
-, CASE
-  when SUBSTR(icd_code, 1, 4) in ('5317','5319','5327','5329','5337','5339','5347','5349') then 1
-  else 0 end as ulcer     /* Chronic Peptic ulcer disease (includes bleeding only if obstruction is also present) */
-
-, CASE
-  when SUBSTR(icd_code, 1, 3) in ('042','043','044') then 1
-  else 0 end as aids      /* HIV and AIDS */
-
-, CASE
-  when SUBSTR(icd_code, 1, 4) in ('2030','2386') then 1
-  when SUBSTR(icd_code, 1, 3) in ('200','201','202') then 1
-  else 0 end as lymph     /* Lymphoma */
-
-, CASE
-  when SUBSTR(icd_code, 1, 3) in ('196','197','198','199') then 1
-  else 0 end as mets      /* Metastatic cancer */
-
-, CASE
-  when SUBSTR(icd_code, 1, 3) in
-  (
-     '140','141','142','143','144','145','146','147','148','149','150','151','152'
-    ,'153','154','155','156','157','158','159','160','161','162','163','164','165'
-    ,'166','167','168','169','170','171','172','174','175','176','177','178','179'
-    ,'180','181','182','183','184','185','186','187','188','189','190','191','192'
-    ,'193','194','195'
-  ) then 1
-  else 0 end as tumor     /* Solid tumor without metastasis */
-
-, CASE
-  when icd_code in ('72889','72930') then 1
-  when SUBSTR(icd_code, 1, 4) in ('7010','7100','7101','7102','7103','7104','7108','7109','7112','7193','7285') then 1
-  when SUBSTR(icd_code, 1, 3) in ('446','714','720','725') then 1
-  else 0 end as arth              /* Rheumatoid arthritis/collagen vascular diseases */
-
-, CASE
-  when SUBSTR(icd_code, 1, 4) in ('2871','2873','2874','2875') then 1
-  when SUBSTR(icd_code, 1, 3) in ('286') then 1
-  else 0 end as coag      /* Coagulation deficiency */
-
-, CASE
-  when SUBSTR(icd_code, 1, 4) in ('2780') then 1
-  else 0 end as obese     /* Obesity      */
-
-, CASE
-  when SUBSTR(icd_code, 1, 4) in ('7832','7994') then 1
-  when SUBSTR(icd_code, 1, 3) in ('260','261','262','263') then 1
-  else 0 end as wghtloss  /* Weight loss */
-
-, CASE
-  when SUBSTR(icd_code, 1, 4) in ('2536') then 1
-  when SUBSTR(icd_code, 1, 3) in ('276') then 1
-  else 0 end as lytes     /* Fluid and electrolyte disorders */
-
-, CASE
-  when SUBSTR(icd_code, 1, 4) in ('2800') then 1
-  else 0 end as bldloss   /* Blood loss anemia */
-
-, CASE
-  when SUBSTR(icd_code, 1, 4) in ('2801','2808','2809') then 1
-  when SUBSTR(icd_code, 1, 3) in ('281') then 1
-  else 0 end as anemdef  /* Deficiency anemias */
-
-, CASE
-  when SUBSTR(icd_code, 1, 4) in ('2652','2911','2912','2913','2915','2918','2919','3030','3039','3050','3575','4255','5353','5710','5711','5712','5713','V113') then 1
-  when SUBSTR(icd_code, 1, 3) in ('980') then 1
-  else 0 end as alcohol /* Alcohol abuse */
-
-, CASE
-  when icd_code in ('V6542') then 1
-  when SUBSTR(icd_code, 1, 4) in ('3052','3053','3054','3055','3056','3057','3058','3059') then 1
-  when SUBSTR(icd_code, 1, 3) in ('292','304') then 1
-  else 0 end as drug /* Drug abuse */
-
-, CASE
-  when icd_code in ('29604','29614','29644','29654') then 1
-  when SUBSTR(icd_code, 1, 4) in ('2938') then 1
-  when SUBSTR(icd_code, 1, 3) in ('295','297','298') then 1
-  else 0 end as psych /* Psychoses */
-
-, CASE
-  when SUBSTR(icd_code, 1, 4) in ('2962','2963','2965','3004') then 1
-  when SUBSTR(icd_code, 1, 3) in ('309','311') then 1
-  else 0 end as depress  /* Depression */
-
-
-from diagnoses_icd
-
-), elixhauser_by_hadm as
-(
-  select subject_id,hadm_id
-    , max(chf) as chf
-    , max(arrhy) as arrhy
-    , max(valve) as valve
-    , max(pulmcirc) as pulmcirc
-    , max(perivasc) as perivasc
-    , max(htn) as htn
-    , max(htncx) as htncx
-    , max(para) as para
-    , max(neuro) as neuro
-    , max(chrnlung) as chrnlung
-    , max(dm) as dm
-    , max(dmcx) as dmcx
-    , max(hypothy) as hypothy
-    , max(renlfail) as renlfail
-    , max(liver) as liver
-    , max(ulcer) as ulcer
-    , max(aids) as aids
-    , max(lymph) as lymph
-    , max(mets) as mets
-    , max(tumor) as tumor
-    , max(arth) as arth
-    , max(coag) as coag
-    , max(obese) as obese
-    , max(wghtloss) as wghtloss
-    , max(lytes) as lytes
-    , max(bldloss) as bldloss
-    , max(anemdef) as anemdef
-    , max(alcohol) as alcohol
-    , max(drug) as drug
-    , max(psych) as psych
-    , max(depress) as depress
-from elixhauser_flags
-group by subject_id,hadm_id
-), elixhauser_rename AS(
-  SELECT
-    subject_id,hadm_id
-    ,  chf as congestive_heart_failure
-    , arrhy as cardiac_arrhythmias
-    , valve as valvular_disease
-    , pulmcirc as pulmonary_circulation
-    , perivasc as peripheral_vascular
-    -- we combine "htn" and "htncx" into "HYPERTENSION"
-    , case
-        when htn = 1 then 1
-        when htncx = 1 then 1
-      else 0 end as hypertension
-    , para as paralysis
-    , neuro as other_neurological
-    , chrnlung as chronic_pulmonary
-    -- only the more severe comorbidity (complicated diabetes) is kept
-    , case
-        when dmcx = 1 then 0
-        when dm = 1 then 1
-      else 0 end as diabetes_uncomplicated
-    , dmcx as diabetes_complicated
-    , hypothy as hypothyroidism
-    , renlfail as renal_failure
-    , liver as liver_disease
-    , ulcer as peptic_ulcer
-    , aids as aids
-    , lymph as lymphoma
-    , mets as metastatic_cancer
-    -- only the more severe comorbidity (metastatic cancer) is kept
-    , case
-        when mets = 1 then 0
-        when tumor = 1 then 1
-      else 0 end as solid_tumor
-    , arth as rheumatoid_arthritis
-    , coag as coagulopathy
-    , obese as obesity
-    , wghtloss as weight_loss
-    , lytes as fluid_electrolyte
-    , bldloss as blood_loss_anemia
-    , anemdef as deficiency_anemias
-    , alcohol as alcohol_abuse
-    , drug as drug_abuse
-    , psych as psychoses
-    , depress as depression
-  FROM elixhauser_by_hadm
-), elixhauser_final AS(
-  SELECT
-      subject_id,hadm_id,
-      LEAST(congestive_heart_failure + cardiac_arrhythmias + valvular_disease + pulmonary_circulation + peripheral_vascular + hypertension, 1) AS cardiovascular,
-      LEAST(paralysis + other_neurological, 1) AS neurological,
-      chronic_pulmonary AS pulmonary,
-      LEAST(diabetes_uncomplicated + diabetes_complicated, 1) AS diabetes,
-      renal_failure AS renal,
-      LEAST(liver_disease + peptic_ulcer, 1) AS liver,
-      LEAST(metastatic_cancer + solid_tumor + lymphoma, 1) AS cancer,
-      LEAST(psychoses + depression + alcohol_abuse + drug_abuse, 1) AS mental_substance,
-      LEAST(coagulopathy + fluid_electrolyte + deficiency_anemias + blood_loss_anemia + obesity + weight_loss + hypothyroidism, 1) AS hem_metabolic,
-      rheumatoid_arthritis AS autoimmune
-    FROM elixhauser_rename
+  FROM hosp.diagnoses_icd d
+  JOIN clean_admissions ca ON d.hadm_id = ca.hadm_id
+  GROUP BY d.subject_id, d.hadm_id
 )
-UPDATE first_admission_data fad
-SET
-  cardiovascular     = ef.cardiovascular,
-  neurological       = ef.neurological,
-  pulmonary          = ef.pulmonary,
-  diabetes           = ef.diabetes,
-  renal              = ef.renal,
-  liver              = ef.liver,
-  cancer             = ef.cancer,
-  mental_substance   = ef.mental_substance,
-  hem_metabolic      = ef.hem_metabolic,
-  autoimmune         = ef.autoimmune
-FROM elixhauser_final ef
-WHERE fad.subject_id = ef.subject_id
-  AND fad.hadm_id = ef.hadm_id;
+SELECT 
+  subject_id,
+  hadm_id,
+  -- Gộp 10 nhóm lớn theo luận văn gốc
+  LEAST(chf + arrhy + valve + pulmcirc + perivasc + htn, 1) AS cardiovascular,
+  LEAST(para + neuro, 1) AS neurological,
+  chrnlung AS pulmonary,
+  dm AS diabetes,
+  renlfail AS renal,
+  liver AS liver,
+  cancer AS cancer,
+  mental_substance AS mental_substance,
+  hem_metabolic AS hem_metabolic,
+  autoimmune AS autoimmune
+FROM elixhauser_flags;
+
+CREATE INDEX idx_clean_comorb_hadm ON clean_comorbidities (hadm_id);
